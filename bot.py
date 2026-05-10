@@ -1,20 +1,19 @@
 import logging
 import random
+import re
 from nba_api.stats.static import players as nba_players
 from nba_api.stats.endpoints import commonplayerinfo, playerdashboardbygeneralsplits, leagueleaders
-from telegram import Update
+from telegram import Update, InputMediaPhoto
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, filters
 )
 
-# config
 TELEGRAM_TOKEN = "7996765199:AAFzTsCHWW5OG45WcB1r_fjxvKE2al0FOkY"
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-# fun facts
 FUN_FACTS = {
     "lebron james":           "The only player in NBA history with 40,000+ points.",
     "stephen curry":          "Changed the game — made the 3-pointer the most dangerous shot in basketball.",
@@ -36,7 +35,9 @@ FAMOUS_PLAYERS = [
     "Jimmy Butler", "Kawhi Leonard", "Damian Lillard"
 ]
 
-# helpers
+def get_photo_url(player_id: int) -> str:
+    return f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
+
 def find_player(name: str):
     results = nba_players.find_players_by_full_name(name)
     if results:
@@ -108,8 +109,18 @@ def format_card(info: dict, stats: dict | None, fun_fact: str) -> str:
     card += f"\n⚡ *Fun Fact:* _{fun_fact}_"
     return card
 
-# handlers
+async def send_player_card(update, player: dict, info: dict, stats: dict | None):
+    fact  = FUN_FACTS.get(player["full_name"].lower(), FUN_FACTS["default"])
+    text  = format_card(info, stats, fact)
+    photo = get_photo_url(player["id"])
+    try:
+        await update.message.reply_photo(photo=photo, caption=text, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(text, parse_mode="Markdown")
+
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     text = (
         "👋 *Welcome to NBA Player Card Bot!*\n\n"
         "Commands:\n"
@@ -122,6 +133,8 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def player_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     name = " ".join(ctx.args)
     if not name:
         await update.message.reply_text("Usage: `/player LeBron James`", parse_mode="Markdown")
@@ -129,18 +142,20 @@ async def player_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔍 Searching...")
     player = find_player(name)
     if not player:
-        await msg.edit_text(f"❌ Player *{name}* not found. Check the spelling.", parse_mode="Markdown")
+        await msg.edit_text(f"❌ Player *{name}* not found.", parse_mode="Markdown")
         return
     try:
         info  = get_player_info(player["id"])
         stats = get_player_stats(player["id"])
-        fact  = FUN_FACTS.get(player["full_name"].lower(), FUN_FACTS["default"])
-        await msg.edit_text(format_card(info, stats, fact), parse_mode="Markdown")
+        await msg.delete()
+        await send_player_card(update, player, info, stats)
     except Exception as e:
         log.error(e)
-        await msg.edit_text("❌ Error fetching player data. Try again in a moment.")
+        await msg.edit_text("❌ Error fetching player data. Try again.")
 
 async def random_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     msg = await update.message.reply_text("🎲 Getting a random player...")
     name   = random.choice(FAMOUS_PLAYERS)
     player = find_player(name)
@@ -150,13 +165,15 @@ async def random_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         info  = get_player_info(player["id"])
         stats = get_player_stats(player["id"])
-        fact  = FUN_FACTS.get(player["full_name"].lower(), FUN_FACTS["default"])
-        await msg.edit_text(format_card(info, stats, fact), parse_mode="Markdown")
+        await msg.delete()
+        await send_player_card(update, player, info, stats)
     except Exception as e:
         log.error(e)
         await msg.edit_text("❌ Error fetching player data. Try again.")
 
 async def top_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     msg = await update.message.reply_text("🏆 Loading top scorers...")
     try:
         leaders = leagueleaders.LeagueLeaders(
@@ -169,10 +186,14 @@ async def top_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         medals = ["🥇","🥈","🥉","4️⃣","5️⃣"]
         for i, r in enumerate(rows):
             text += f"{medals[i]} *{r['PLAYER']}* ({r['TEAM']}) — *{round(r['PTS'],1)} PPG*\n"
-        await msg.edit_text(text, parse_mode="Markdown")
+        await msg.delete()
+        await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as e:
         log.error(e)
-        await msg.edit_text("❌ Could not load top scorers. Try again.")
+        try:
+            await msg.edit_text("❌ Could not load top scorers. Try again.")
+        except Exception:
+            await update.message.reply_text("❌ Could not load top scorers. Try again.")
 
 async def compare_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not update.message:
@@ -182,14 +203,13 @@ async def compare_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Usage: `/compare LeBron James vs Stephen Curry`", parse_mode="Markdown")
         return
-    import re
     parts = re.split(r"(?i) vs ", raw)
     name1, name2 = parts[0].strip(), parts[1].strip()
     msg = await update.message.reply_text("⚔️ Comparing players...")
     p1 = find_player(name1)
     p2 = find_player(name2)
     if not p1 or not p2:
-        await msg.edit_text("❌ Could not find one or both players. Check the spelling.")
+        await msg.edit_text("❌ Could not find one or both players.")
         return
     try:
         s1 = get_player_stats(p1["id"])
@@ -215,15 +235,21 @@ async def compare_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             + row("STL", "STL", "🛡")
             + row("BLK", "BLK", "🚫")
         )
-        await msg.edit_text(text, parse_mode="Markdown")
+        await msg.delete()
+        await update.message.reply_media_group(media=[
+            InputMediaPhoto(media=get_photo_url(p1["id"]), caption=f"🏀 {n1}"),
+            InputMediaPhoto(media=get_photo_url(p2["id"]), caption=f"🏀 {n2}"),
+        ])
+        await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as e:
         log.error(e)
         await msg.edit_text("❌ Error comparing players. Try again.")
 
 async def unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
     await update.message.reply_text("❓ Unknown command. Type /start to see all commands.")
 
-# main
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start",   start))
