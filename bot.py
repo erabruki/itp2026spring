@@ -36,9 +36,18 @@ FAMOUS_PLAYERS = [
 ]
 
 def get_photo_url(player_id: int) -> str:
+    """
+    Return the NBA CDN headshot URL for a given player ID.
+    Images are 1040x760 PNG hosted at cdn.nba.com.
+    """
     return f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png"
 
 def find_player(name: str):
+    """
+    Search for an NBA player by full or partial name.
+    Tries full name match first, then falls back to last name.
+    Returns the first active player found, or any match if none are active.
+    """
     results = nba_players.find_players_by_full_name(name)
     if results:
         active = [p for p in results if p["is_active"]]
@@ -50,10 +59,20 @@ def find_player(name: str):
     return None
 
 def get_player_info(player_id: int) -> dict:
+    """
+    Fetch detailed player profile from the NBA API using player ID.
+    Returns a dict with fields like DISPLAY_FIRST_LAST, TEAM_NAME,
+    POSITION, JERSEY, COUNTRY, HEIGHT, WEIGHT, SEASON_EXP.
+    """
     info = commonplayerinfo.CommonPlayerInfo(player_id=player_id)
     return info.get_normalized_dict()["CommonPlayerInfo"][0]
 
 def get_player_stats(player_id: int) -> dict | None:
+    """
+    Fetch per-game season averages for a player from the NBA API.
+    Tries seasons 2024-25, 2023-24, 2022-23 in order.
+    Returns the first season with non-zero PTS, or None if unavailable.
+    """
     for season in ["2024-25", "2023-24", "2022-23"]:
         try:
             dash = playerdashboardbygeneralsplits.PlayerDashboardByGeneralSplits(
@@ -68,6 +87,10 @@ def get_player_stats(player_id: int) -> dict | None:
     return None
 
 def format_card(info: dict, stats: dict | None, fun_fact: str) -> str:
+    """
+    Format a player card as a Markdown string for Telegram.
+    Includes profile info, season averages (if available), and a fun fact.
+    """
     name    = info.get("DISPLAY_FIRST_LAST", "Unknown")
     team    = info.get("TEAM_NAME") or "—"
     pos     = info.get("POSITION") or "—"
@@ -110,6 +133,10 @@ def format_card(info: dict, stats: dict | None, fun_fact: str) -> str:
     return card
 
 async def send_player_card(update, player: dict, info: dict, stats: dict | None):
+    """
+    Send a player card to the user with their photo.
+    Falls back to text-only if the photo URL is unavailable.
+    """
     fact  = FUN_FACTS.get(player["full_name"].lower(), FUN_FACTS["default"])
     text  = format_card(info, stats, fact)
     photo = get_photo_url(player["id"])
